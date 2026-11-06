@@ -45,10 +45,10 @@ jobs:
           cat > dist/bundle/manifest.json <<'JSON'
           {
             "manifest_version": "1",
-            "name": "apple-mail",
-            "display_name": "Apple Mail MCP",
+            "name": "macos-mail-mcp",
+            "display_name": "macOS Mail MCP (Draft-Only)",
             "version": "__VERSION__",
-            "description": "Programmatic Apple Mail access for MCP clients.",
+            "description": "Unofficial macOS Mail MCP server: fast Envelope Index reading and safe draft-only composing with zero send capability.",
             "server": {
               "type": "binary",
               "entry_point": "darwin/universal/apple-mail-mcp",
@@ -66,7 +66,7 @@ jobs:
                 "type": "boolean",
                 "title": "Read-only mode",
                 "default": false,
-                "description": "Disable send_email, create_draft, and mark_as_read tools."
+                "description": "Disable draft, move, and profile-write tools."
               },
               "log_level": {
                 "type": "string",

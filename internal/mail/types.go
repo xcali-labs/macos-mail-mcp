@@ -25,6 +25,7 @@ type MessageSummary struct {
 	Date    time.Time `json:"date"`
 	Read    bool      `json:"read"`
 	Mailbox string    `json:"mailbox"`
+	Account string    `json:"account"`
 }
 
 type Message struct {
@@ -35,9 +36,22 @@ type Message struct {
 	CC         []string  `json:"cc"`
 	Date       time.Time `json:"date"`
 	Body       string    `json:"body"`
+	BodyCut    bool      `json:"-"`
 	Mailbox    string    `json:"mailbox"`
 	Read       bool      `json:"read"`
 	Flagged    bool      `json:"flagged"`
+}
+
+// SearchResult says how much of the mailbox a search covered, so the model can
+// tell the user when older mail was not looked at.
+type SearchResult struct {
+	Messages    []MessageSummary
+	Scanned     int
+	MailboxSize int
+	Truncated   bool
+	Engine      string // "index" or "mail"
+	More        bool   // more matches exist beyond the limit
+	Fallback    bool   // the index was wanted but could not be used
 }
 
 type SearchQuery struct {
@@ -49,6 +63,7 @@ type SearchQuery struct {
 	DateFrom        *time.Time
 	DateTo          *time.Time
 	Limit           int
+	ScanLimit       int
 }
 
 type ComposeInput struct {
@@ -56,8 +71,19 @@ type ComposeInput struct {
 	Subject string
 	Body    string
 	CC      []string
-	BCC     []string
 	Account string
+}
+
+type ReplyInput struct {
+	MessageID string
+	Body      string
+}
+
+// ReplyResult says where the saved draft is addressed.
+type ReplyResult struct {
+	Recipients []string
+	Sender     string
+	Warning    string
 }
 
 type UnreadCounts struct {

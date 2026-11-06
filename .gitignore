@@ -37,3 +37,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+dist/
+.tmp-go-cache/
+apple-mail-mcp
+.project.yml
+skill/eval/results-*.json

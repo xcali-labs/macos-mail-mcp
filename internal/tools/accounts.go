@@ -48,13 +48,13 @@ type unreadMailboxRow struct {
 }
 
 func registerAccountsTools(server *mcp.Server, client MailClient, logger *slog.Logger) {
-	mcp.AddTool(server, &mcp.Tool{Name: "list_accounts", Description: "List Mail.app account names"},
+	mcp.AddTool(server, &mcp.Tool{Name: "list_accounts", Description: "List the names of the mail accounts. Use only if you need an exact account name."},
 		newListAccountsHandler(client, logger))
 
-	mcp.AddTool(server, &mcp.Tool{Name: "list_mailboxes", Description: "List mailboxes and unread counts for an account"},
+	mcp.AddTool(server, &mcp.Tool{Name: "list_mailboxes", Description: "List the folders of one account with their unread counts. Use before move_message to get the exact folder name."},
 		newListMailboxesHandler(client, logger))
 
-	mcp.AddTool(server, &mcp.Tool{Name: "get_unread_count", Description: "Get unread counts by mailbox and total"},
+	mcp.AddTool(server, &mcp.Tool{Name: "get_unread_count", Description: "Count unread emails per folder. Use when the user asks how many new emails they have."},
 		newGetUnreadCountHandler(client, logger))
 }
 

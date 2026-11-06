@@ -1,162 +1,90 @@
-# apple-mail-mcp
+# macos-mail-mcp
 
-[![CI](https://github.com/maximbilan/apple-mail-mcp-go/actions/workflows/ci.yml/badge.svg)](https://github.com/maximbilan/apple-mail-mcp-go/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/maximbilan/apple-mail-mcp-go)](https://github.com/maximbilan/apple-mail-mcp-go/releases)
-[![License](https://img.shields.io/github/license/maximbilan/apple-mail-mcp-go?cacheSeconds=300)](https://github.com/maximbilan/apple-mail-mcp-go/blob/main/LICENSE)
+> **Unofficial MCP server for Apple Mail on macOS.** Combines fast mailbox reading and safe, draft-only composing in a single static binary. Nothing in this codebase can send an email: every compose action saves an unsent draft in Apple Mail for the user to review and send.
 
-`apple-mail-mcp` is a Go Model Context Protocol (MCP) server for macOS that gives MCP-compatible assistants programmatic access to Mail.app for listing accounts/mailboxes, searching and reading messages, sending drafts/emails, and unread-count workflows.
+[![CI](https://github.com/xcali-labs/macos-mail-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/xcali-labs/macos-mail-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/xcali-labs/macos-mail-mcp)](https://github.com/xcali-labs/macos-mail-mcp/releases)
+[![License](https://img.shields.io/github/license/xcali-labs/macos-mail-mcp?cacheSeconds=300)](https://github.com/xcali-labs/macos-mail-mcp/blob/main/LICENSE)
 
-## Prerequisites
+## Why reading and drafting live in one repository and one binary
 
-- macOS 12+
-- Mail.app configured with at least one account
-- Go 1.22+ (only required for building from source)
+1. **Draft safety depends on read-engine context.**
+   - `create_draft` queries the read-only Envelope Index to verify that every `to` and `cc` address is someone the user has already sent mail to (preventing prompt-injected exfiltration to unknown addresses).
+   - `reply_draft` reads the original message's `From` and `Reply-To` headers, creates a threaded quote in `Drafts`, and warns if the reply address differs from the sender or belongs to another organisation.
+   - Voice and language onboarding (`sample_sent_mail`, `get_profile`, `save_profile`, `remember`, `forget`) samples the user's sent mail through the read engine to learn how they write drafts.
+2. **One atomic binary, flexible MCP host permissions.**
+   - Every Mac install deploys and verifies a single binary (`apple-mail-mcp`).
+   - Pass `--read-only` to register only the 7 read tools, `--write-only` to register only the 6 draft/move/profile-write tools, or neither flag to expose all 13 tools on one MCP server entry. Hosts that approve permissions per server (such as Jan) can point two server entries (`mail` and `mail-write`) at the same binary.
+3. **No send path anywhere.**
+   - Upstream's `send_email` and `mark_as_read` tools and the AppleScript `send` command are removed. `TestNoScriptCanSend` fails the build if a send command reappears anywhere in the repository.
 
 ## Installation
 
-### 1. One-click for Claude Desktop
-
-Download `apple-mail-mcp.mcpb` from the [latest release](https://github.com/maximbilan/apple-mail-mcp-go/releases/latest) and double-click it. Claude Desktop installs and registers the server automatically.
-
-### 2. One-line install (recommended for Claude Code or both clients)
+### 1. One-line install (macOS)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/maximbilan/apple-mail-mcp-go/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/xcali-labs/macos-mail-mcp/main/install.sh | sh
 ```
 
-This installer:
-- Detects macOS architecture and installs `~/.local/bin/apple-mail-mcp`
-- Uses local `go build`/`go install` when Go exists, otherwise downloads the latest release binary and verifies SHA256
-- Detects Claude Desktop and/or Claude Code and offers registration
+This downloads the latest signed release for your Mac architecture (or builds from source if Go is installed), verifies its SHA256 checksum, and installs `~/.local/bin/apple-mail-mcp`.
 
-### 3. Build from source (Go developers)
+### 2. Claude Desktop / Claude Code
 
-```sh
-go install github.com/maximbilan/apple-mail-mcp-go/cmd/apple-mail-mcp@latest
-apple-mail-mcp install
-```
-
-### 4. Manual configuration
-
-Claude Desktop config path:
-
-`~/Library/Application Support/Claude/claude_desktop_config.json`
-
-Add/update:
+In `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "apple-mail": {
+    "mail": {
       "command": "/Users/<you>/.local/bin/apple-mail-mcp",
-      "args": []
+      "args": ["--read-only"]
+    },
+    "mail-write": {
+      "command": "/Users/<you>/.local/bin/apple-mail-mcp",
+      "args": ["--write-only"]
     }
   }
 }
 ```
 
-Claude Code:
+Or with Claude Code:
 
 ```sh
-claude mcp add apple-mail "$HOME/.local/bin/apple-mail-mcp" --scope user
+claude mcp add mail "$HOME/.local/bin/apple-mail-mcp" --scope user -- --read-only
+claude mcp add mail-write "$HOME/.local/bin/apple-mail-mcp" --scope user -- --write-only
 ```
 
-## Permissions
+### 3. Build from source
 
-The first time `osascript` controls Mail.app, macOS shows an Automation permission prompt.
-Grant access for the calling process (for example Terminal, Claude Desktop, or Claude Code).
-If needed, manage this at:
-
-`System Settings -> Privacy & Security -> Automation`
+```sh
+make test
+make release   # produces dist/apple-mail-mcp-darwin-arm64 and dist/SHA256SUMS (CGO_ENABLED=0)
+cp dist/apple-mail-mcp-darwin-arm64 ~/.local/bin/apple-mail-mcp
+~/.local/bin/apple-mail-mcp index-check --deep
+```
 
 ## Tool Reference
 
-Generated from registered tools via:
+Generated via `go run ./cmd/apple-mail-mcp tools-docs`:
 
-```sh
-go run ./cmd/apple-mail-mcp tools-docs
-```
+| Mode | Name | Params | Description |
+|---|---|---|---|
+| Read (`--read-only`) | `list_accounts` | none | List account names configured in Mail.app (`local` for On My Mac folders). |
+| Read (`--read-only`) | `list_mailboxes` | `account` (string, required) | List mailboxes for an account with unread counts. |
+| Read (`--read-only`) | `search_messages` | `account`, `mailbox`, `sender_contains`, `subject_contains`, `unread_only`, `date_from`, `date_to`, `limit`, `scan_limit` | Find emails across accounts and folders via the SQLite Envelope Index with automatic AppleScript fallback. |
+| Read (`--read-only`) | `get_message` | `message_id` (required), `include_body` | Get message metadata and optionally full body (cut at 20,000 characters). |
+| Read (`--read-only`) | `get_unread_count` | `account` (optional) | Get total and per-mailbox unread counts. |
+| Read (`--read-only`) | `get_profile` | none | Read the writing profile and taught preferences. |
+| Read (`--read-only`) | `sample_sent_mail` | `page` | Read a sample of the user's own words from sent mail. |
+| Write (`--write-only`) | `create_draft` | `to`, `subject`, `body`, `cc`, `account` | Save a new email unsent in Drafts, only to someone already written to. |
+| Write (`--write-only`) | `reply_draft` | `message_id`, `body` | Save a quoted in-thread reply unsent in Drafts; returns its recipients. |
+| Write (`--write-only`) | `move_message` | `message_id`, `target_mailbox` | Move one message to another mailbox (trash, junk, sent, drafts and outbox refused). |
+| Write (`--write-only`) | `save_profile` | `profile` | Save the writing profile. |
+| Write (`--write-only`) | `remember` | `preference` | Save one taught preference. |
+| Write (`--write-only`) | `forget` | `number` | Delete one taught preference. |
 
-| Name | Params | Description |
-|---|---|---|
-| list_accounts | none | List account names configured in Mail.app. |
-| list_mailboxes | account (string, required) | List mailboxes for an account with unread counts. |
-| search_messages | account (required), mailbox, sender_contains, subject_contains, unread_only, date_from, date_to, limit | Search messages with server-side filters. |
-| get_message | message_id (required), include_body | Get message metadata and optionally full body. |
-| get_unread_count | account (optional) | Get total and per-mailbox unread counts. |
-| send_email | to, subject, body, cc, bcc, account | Send a plaintext email immediately. |
-| create_draft | to, subject, body, cc, bcc, account | Create a draft email without sending. |
-| mark_as_read | message_ids, read | Mark messages as read/unread (max 100 ids). |
-
-## Running
-
-Start over stdio transport:
-
-```sh
-apple-mail-mcp --log-level info
-```
-
-Read-only mode (write tools hidden):
-
-```sh
-apple-mail-mcp --read-only
-```
-
-## Known Limitations
-
-- Some Mail messages can have missing/malformed date metadata. `search_messages` falls back from `date sent` to `date received`, and date can be empty when unavailable.
-- Gmail label model can surface `All Mail` semantics. `search_messages` mailbox output reflects the mailbox requested in the query (for example `INBOX`) to avoid confusion.
-
-## Integration Tests
-
-Integration tests require Mail.app on macOS and explicit build tag:
-
-```sh
-go test ./tests/integration -tags=integration -v
-```
-
-## Troubleshooting
-
-- Mail.app not responding:
-  - Open Mail.app once and ensure account sync completes.
-- Permission denied:
-  - Re-check macOS Automation permissions for the process invoking the server.
-- AppleScript timeout:
-  - Open Mail.app, wait for sync to settle, then retry.
-  - Increase timeout with `APPLE_MAIL_MCP_TIMEOUT` (e.g. `120s` or `180`).
-- Config did not update:
-  - Restart Claude Desktop and run `claude mcp list` for Claude Code.
-
-## Release Validation Checklist
-
-Before creating a public release:
-
-```sh
-go build ./...
-go vet ./...
-go test ./... -race
-```
-
-Install path smoke checks:
-
-```sh
-./install.sh
-apple-mail-mcp install --yes
-apple-mail-mcp uninstall --yes
-```
-
-## Uninstall
-
-```sh
-./uninstall.sh
-```
-
-Or if installed from `go install`:
-
-```sh
-apple-mail-mcp uninstall
-```
+See [FORK.md](FORK.md) for architecture details and [INSTALL-CHECKLIST.md](INSTALL-CHECKLIST.md) for the client installation runbook.
 
 ## License
 
-MIT
+MIT (forked from `maximbilan/apple-mail-mcp-go` at `1a843d8`).

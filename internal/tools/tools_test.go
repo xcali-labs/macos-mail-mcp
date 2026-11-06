@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/maximbilan/apple-mail-mcp-go/internal/mail"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type fakeMailClient struct {
@@ -17,14 +20,13 @@ type fakeMailClient struct {
 	searchResults []mail.MessageSummary
 	message       mail.Message
 	unread        mail.UnreadCounts
-	sendID        string
 	draftID       string
-	markUpdated   int
 
 	lastSearchQuery mail.SearchQuery
 	lastMessageID   string
 	lastIncludeBody bool
-	lastMarkRead    bool
+	lastReply       mail.ReplyInput
+	lastMoveTarget  string
 
 	err error
 }
@@ -35,24 +37,34 @@ func (f *fakeMailClient) ListAccounts(ctx context.Context) ([]mail.Account, erro
 func (f *fakeMailClient) ListMailboxes(ctx context.Context, account string) ([]mail.Mailbox, error) {
 	return f.mailboxes, f.err
 }
-func (f *fakeMailClient) SearchMessages(ctx context.Context, q mail.SearchQuery) ([]mail.MessageSummary, error) {
+func (f *fakeMailClient) SearchMessages(ctx context.Context, q mail.SearchQuery) (mail.SearchResult, error) {
 	f.lastSearchQuery = q
-	return f.searchResults, f.err
+	return mail.SearchResult{Messages: f.searchResults, Scanned: len(f.searchResults), MailboxSize: len(f.searchResults)}, f.err
 }
 func (f *fakeMailClient) GetMessage(ctx context.Context, messageID string, includeBody bool) (mail.Message, error) {
 	f.lastMessageID = messageID
 	f.lastIncludeBody = includeBody
 	return f.message, f.err
 }
-func (f *fakeMailClient) SendEmail(ctx context.Context, input mail.ComposeInput) (string, error) {
-	return f.sendID, f.err
+func (f *fakeMailClient) ReplyDraft(ctx context.Context, input mail.ReplyInput) (mail.ReplyResult, error) {
+	f.lastReply = input
+	return mail.ReplyResult{Recipients: []string{"ivan@example.com"}, Sender: "ivan@example.com"}, f.err
+}
+func (f *fakeMailClient) GetProfile() (mail.Profile, error)                 { return mail.Profile{}, f.err }
+func (f *fakeMailClient) SaveVoice(ctx context.Context, voice string) error { return f.err }
+func (f *fakeMailClient) Remember(ctx context.Context, text string) (mail.Rule, error) {
+	return mail.Rule{Number: 1, Text: text}, f.err
+}
+func (f *fakeMailClient) Forget(number int) error { return f.err }
+func (f *fakeMailClient) SampleSentMail(ctx context.Context, page int) ([]mail.SentSample, error) {
+	return nil, f.err
+}
+func (f *fakeMailClient) MoveMessage(ctx context.Context, messageID, targetMailbox string) error {
+	f.lastMoveTarget = targetMailbox
+	return f.err
 }
 func (f *fakeMailClient) CreateDraft(ctx context.Context, input mail.ComposeInput) (string, error) {
 	return f.draftID, f.err
-}
-func (f *fakeMailClient) MarkAsRead(ctx context.Context, messageIDs []string, read bool) (int, error) {
-	f.lastMarkRead = read
-	return f.markUpdated, f.err
 }
 func (f *fakeMailClient) GetUnreadCount(ctx context.Context, account string) (mail.UnreadCounts, error) {
 	return f.unread, f.err
@@ -142,31 +154,80 @@ func TestGetMessageHandlerDefaultsIncludeBodyTrue(t *testing.T) {
 	}
 }
 
-func TestMarkAsReadHandlerDefaultsReadTrue(t *testing.T) {
-	fake := &fakeMailClient{markUpdated: 2}
-	h := newMarkAsReadHandler(fake, testLogger())
+func TestComposeHandlersPassThroughErrors(t *testing.T) {
+	fake := &fakeMailClient{err: errors.New("boom")}
+	draftHandler := newCreateDraftHandler(fake, testLogger())
+	replyHandler := newReplyDraftHandler(fake, testLogger())
+	moveHandler := newMoveMessageHandler(fake, testLogger())
 
-	_, out, err := h(context.Background(), nil, markAsReadInput{MessageIDs: []string{"1", "2"}})
-	if err != nil {
-		t.Fatalf("handler returned error: %v", err)
+	if _, _, err := draftHandler(context.Background(), nil, createDraftInput{To: []string{"alice@example.com"}, Subject: "s", Body: "b"}); err == nil {
+		t.Fatal("expected draft error")
 	}
-	if out.Updated != 2 {
-		t.Fatalf("unexpected updated count: %d", out.Updated)
+	if _, _, err := replyHandler(context.Background(), nil, replyDraftInput{MessageID: "1", Body: "b"}); err == nil {
+		t.Fatal("expected reply error")
 	}
-	if !fake.lastMarkRead {
-		t.Fatal("expected default read=true")
+	if _, _, err := moveHandler(context.Background(), nil, moveMessageInput{MessageID: "1", TargetMailbox: "Archive"}); err == nil {
+		t.Fatal("expected move error")
 	}
 }
 
-func TestComposeHandlersPassThroughErrors(t *testing.T) {
-	fake := &fakeMailClient{err: errors.New("boom")}
-	sendHandler := newSendEmailHandler(fake, testLogger())
-	draftHandler := newCreateDraftHandler(fake, testLogger())
-
-	if _, _, err := sendHandler(context.Background(), nil, sendEmailInput{To: []string{"alice@example.com"}, Subject: "s", Body: "b"}); err == nil {
-		t.Fatal("expected send error")
+func TestReplyDraftHandlerReportsRecipients(t *testing.T) {
+	fake := &fakeMailClient{}
+	h := newReplyDraftHandler(fake, testLogger())
+	_, out, err := h(context.Background(), nil, replyDraftInput{MessageID: "mref:iCloud:INBOX:5", Body: "Ďakujem"})
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
 	}
-	if _, _, err := draftHandler(context.Background(), nil, createDraftInput{To: []string{"alice@example.com"}, Subject: "s", Body: "b"}); err == nil {
-		t.Fatal("expected draft error")
+	if len(out.Recipients) != 1 || out.Recipients[0] != "ivan@example.com" || !strings.Contains(out.Status, "unsent") {
+		t.Fatalf("unexpected output: %+v", out)
+	}
+	if fake.lastReply.Body != "Ďakujem" {
+		t.Fatalf("input not passed through: %+v", fake.lastReply)
+	}
+}
+
+// TestRegisteredToolsAreExactlyTheAllowedSet lists the tools a real MCP
+// client sees. Any new tool (above all a send tool) fails this test.
+func TestRegisteredToolsAreExactlyTheAllowedSet(t *testing.T) {
+	reads := []string{"get_message", "get_profile", "get_unread_count", "list_accounts", "list_mailboxes", "sample_sent_mail", "search_messages"}
+	writes := []string{"create_draft", "forget", "move_message", "remember", "reply_draft", "save_profile"}
+	all := append(append([]string{}, writes...), reads...)
+	sort.Strings(all)
+	cases := []struct {
+		name string
+		opts RegisterOptions
+		want []string
+	}{
+		{"full", RegisterOptions{}, all},
+		{"read-only", RegisterOptions{ReadOnly: true}, reads},
+		{"write-only", RegisterOptions{WriteOnly: true}, writes},
+	}
+	for _, c := range cases {
+		ctx := context.Background()
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+		c.opts.Logger = testLogger()
+		Register(server, &fakeMailClient{}, c.opts)
+		st, ct := mcp.NewInMemoryTransports()
+		if _, err := server.Connect(ctx, st, nil); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0"}, nil)
+		session, err := client.Connect(ctx, ct, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := session.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, 0, len(res.Tools))
+		for _, tool := range res.Tools {
+			got = append(got, tool.Name)
+		}
+		sort.Strings(got)
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Fatalf("%s tools = %v, want %v", c.name, got, c.want)
+		}
+		session.Close()
 	}
 }

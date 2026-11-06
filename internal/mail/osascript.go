@@ -67,7 +67,7 @@ func (r *OsaScriptRunner) Run(ctx context.Context, script string) (string, error
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	cmd := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", script)
 	output, err := cmd.Output()
 	if err == nil {
 		return strings.TrimSpace(string(output)), nil
